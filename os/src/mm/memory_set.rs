@@ -46,6 +46,50 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Copy to a user buffer only after validating every page and permission.
+    /// AI assistance: OpenAI Codex; requirements: rCore Guide chapter 4 exercise.
+    pub fn copy_to_user(&self, start: usize, bytes: &[u8]) -> bool {
+        let Some(end) = start.checked_add(bytes.len()) else {
+            return false;
+        };
+        if end > (1usize << 38) {
+            return false;
+        }
+        let mut cursor = start;
+        while cursor < end {
+            let Some(pte) = self.translate(VirtAddr::from(cursor).floor()) else {
+                return false;
+            };
+            if !pte.flags().contains(PTEFlags::U | PTEFlags::W) {
+                return false;
+            }
+            cursor += (PAGE_SIZE - cursor % PAGE_SIZE).min(end - cursor);
+        }
+        let mut copied = 0;
+        while copied < bytes.len() {
+            let address = start + copied;
+            let pte = self.translate(VirtAddr::from(address).floor()).unwrap();
+            let offset = address % PAGE_SIZE;
+            let count = (PAGE_SIZE - offset).min(bytes.len() - copied);
+            pte.ppn().get_bytes_array()[offset..offset + count]
+                .copy_from_slice(&bytes[copied..copied + count]);
+            copied += count;
+        }
+        true
+    }
+
+    /// Read one byte after checking the user and read permission bits.
+    pub fn read_user_byte(&self, address: usize) -> Option<u8> {
+        if address >= (1usize << 38) {
+            return None;
+        }
+        let pte = self.translate(VirtAddr::from(address).floor())?;
+        if !pte.flags().contains(PTEFlags::U | PTEFlags::R) {
+            return None;
+        }
+        Some(pte.ppn().get_bytes_array()[address % PAGE_SIZE])
+    }
+
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {

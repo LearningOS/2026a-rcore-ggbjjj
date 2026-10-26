@@ -1,5 +1,6 @@
 //! Implementation of  [`ProcessControlBlock`]
 
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 8 exercise.
 use super::id::RecycleAllocator;
 use super::manager::insert_into_pid2process;
 use super::TaskControlBlock;
@@ -25,6 +26,8 @@ pub struct ProcessControlBlock {
 
 /// Inner of Process Control Block
 pub struct ProcessControlBlockInner {
+    /// Per-process resource accounting and deadlock detection.
+    pub deadlock: crate::sync::DeadlockDetector,
     /// is zombie?
     pub is_zombie: bool,
     /// memory set(address space)
@@ -100,6 +103,7 @@ impl ProcessControlBlock {
             pid: pid_handle,
             inner: unsafe {
                 UPSafeCell::new(ProcessControlBlockInner {
+                    deadlock: crate::sync::DeadlockDetector::default(),
                     is_zombie: false,
                     memory_set,
                     parent: None,
@@ -233,6 +237,7 @@ impl ProcessControlBlock {
             pid,
             inner: unsafe {
                 UPSafeCell::new(ProcessControlBlockInner {
+                    deadlock: crate::sync::DeadlockDetector::default(),
                     is_zombie: false,
                     memory_set,
                     parent: Some(Arc::downgrade(self)),
