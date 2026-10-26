@@ -1,5 +1,6 @@
 //! File trait & inode(dir, file, pipe, stdin, stdout)
 
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 6 exercise.
 mod inode;
 mod stdio;
 
@@ -7,6 +8,10 @@ use crate::mm::UserBuffer;
 
 /// trait File for all file types
 pub trait File: Send + Sync {
+    /// Return metadata for regular files, or None for unsupported file types.
+    fn stat(&self) -> Option<Stat> {
+        None
+    }
     /// the file readable?
     fn readable(&self) -> bool;
     /// the file writable?
@@ -46,5 +51,22 @@ bitflags! {
     }
 }
 
-pub use inode::{list_apps, open_file, OSInode, OpenFlags};
+pub use inode::{list_apps, open_file, OSInode, OpenFlags, ROOT_INODE};
 pub use stdio::{Stdin, Stdout};
+
+impl Stat {
+    /// Create a fully initialized ABI-compatible file status.
+    pub fn regular(ino: u64, directory: bool, nlink: u32) -> Self {
+        Self {
+            dev: 0,
+            ino,
+            mode: if directory {
+                StatMode::DIR
+            } else {
+                StatMode::FILE
+            },
+            nlink,
+            pad: [0; 7],
+        }
+    }
+}

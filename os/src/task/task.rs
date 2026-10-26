@@ -39,6 +39,10 @@ impl TaskControlBlock {
 }
 
 pub struct TaskControlBlockInner {
+    /// AI assistance: OpenAI Codex; rCore Guide chapter 5 stride scheduling.
+    pub priority: usize,
+    /// Accumulated scheduling service, compared using a wide counter.
+    pub stride: u128,
     /// The physical page number of the frame where the trap context is placed
     pub trap_cx_ppn: PhysPageNum,
 
@@ -117,6 +121,8 @@ impl TaskControlBlock {
             kernel_stack,
             inner: unsafe {
                 UPSafeCell::new(TaskControlBlockInner {
+                    priority: 16,
+                    stride: 0,
                     trap_cx_ppn,
                     base_size: user_sp,
                     task_cx: TaskContext::goto_trap_return(kernel_stack_top),
@@ -165,6 +171,9 @@ impl TaskControlBlock {
         inner.memory_set = memory_set;
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
+        inner.base_size = user_sp;
+        inner.heap_bottom = user_sp;
+        inner.program_brk = user_sp;
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
             entry_point,
@@ -205,6 +214,8 @@ impl TaskControlBlock {
             kernel_stack,
             inner: unsafe {
                 UPSafeCell::new(TaskControlBlockInner {
+                    priority: 16,
+                    stride: 0,
                     trap_cx_ppn,
                     base_size: parent_inner.base_size,
                     task_cx: TaskContext::goto_trap_return(kernel_stack_top),

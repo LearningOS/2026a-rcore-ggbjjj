@@ -1,4 +1,5 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 6 exercise.
 use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::string::String;
 use alloc::vec;
@@ -99,7 +100,7 @@ impl PageTable {
                 break;
             }
             if !pte.is_valid() {
-                let frame = frame_alloc().unwrap();
+                let frame = frame_alloc()?;
                 *pte = PageTableEntry::new(frame.ppn, PTEFlags::V);
                 self.frames.push(frame);
             }
@@ -132,6 +133,17 @@ impl PageTable {
         assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
     }
+    /// A fallible mapping path for user allocations under memory pressure.
+    pub fn try_map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> bool {
+        let Some(pte) = self.find_pte_create(vpn) else {
+            return false;
+        };
+        if pte.is_valid() {
+            return false;
+        }
+        *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+        true
+    }
     /// remove the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn unmap(&mut self, vpn: VirtPageNum) {
@@ -141,7 +153,9 @@ impl PageTable {
     }
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
-        self.find_pte(vpn).map(|pte| *pte)
+        self.find_pte(vpn)
+            .filter(|pte| pte.is_valid())
+            .map(|pte| *pte)
     }
     /// get the physical address from the virtual address
     pub fn translate_va(&self, va: VirtAddr) -> Option<PhysAddr> {

@@ -4,6 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 6 exercise.
 use super::File;
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
@@ -31,6 +32,7 @@ pub struct OSInodeInner {
 impl OSInode {
     /// create a new inode in memory
     pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+        inode.open();
         Self {
             readable,
             writable,
@@ -56,6 +58,7 @@ impl OSInode {
 }
 
 lazy_static! {
+    /// Shared root directory used for file lookup and hard-link operations.
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
@@ -125,7 +128,17 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+impl Drop for OSInode {
+    fn drop(&mut self) {
+        self.inner.exclusive_access().inode.close();
+    }
+}
+
 impl File for OSInode {
+    fn stat(&self) -> Option<super::Stat> {
+        let (ino, directory, nlink) = self.inner.exclusive_access().inode.stat();
+        Some(super::Stat::regular(ino as u64, directory, nlink))
+    }
     fn readable(&self) -> bool {
         self.readable
     }

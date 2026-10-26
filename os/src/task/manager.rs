@@ -1,4 +1,5 @@
 //!Implementation of [`TaskManager`]
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 6 exercise.
 use super::TaskControlBlock;
 use crate::sync::UPSafeCell;
 use alloc::collections::VecDeque;
@@ -9,7 +10,7 @@ pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
-/// A simple FIFO scheduler.
+/// A stride scheduler; equal strides retain ready-queue order.
 impl TaskManager {
     ///Creat an empty TaskManager
     pub fn new() -> Self {
@@ -23,7 +24,18 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        let (index, _) = self
+            .ready_queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, task)| task.inner_exclusive_access().stride)?;
+        let task = self.ready_queue.remove(index).unwrap();
+        {
+            let mut inner = task.inner_exclusive_access();
+            let pass = (1u128 << 64) / inner.priority as u128;
+            inner.stride += pass;
+        }
+        Some(task)
     }
 }
 

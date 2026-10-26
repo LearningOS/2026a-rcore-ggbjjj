@@ -1,12 +1,17 @@
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 6 exercise.
 use super::{
     block_cache_sync_all, get_block_cache, Bitmap, BlockDevice, DiskInode, DiskInodeType, Inode,
     SuperBlock,
 };
 use crate::BLOCK_SZ;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use spin::Mutex;
 ///An easy file system on block
 pub struct EasyFileSystem {
+    /// Open descriptions keep unlinked inodes alive until their last close.
+    pub(crate) open_inodes: BTreeMap<u32, usize>,
+    pub(crate) orphans: BTreeSet<u32>,
     ///Real device
     pub block_device: Arc<dyn BlockDevice>,
     ///Inode bitmap
@@ -40,6 +45,8 @@ impl EasyFileSystem {
             data_bitmap_blocks as usize,
         );
         let mut efs = Self {
+            open_inodes: BTreeMap::new(),
+            orphans: BTreeSet::new(),
             block_device: Arc::clone(&block_device),
             inode_bitmap,
             data_bitmap,
@@ -91,6 +98,8 @@ impl EasyFileSystem {
                 let inode_total_blocks =
                     super_block.inode_bitmap_blocks + super_block.inode_area_blocks;
                 let efs = Self {
+                    open_inodes: BTreeMap::new(),
+                    orphans: BTreeSet::new(),
                     block_device,
                     inode_bitmap: Bitmap::new(1, super_block.inode_bitmap_blocks as usize),
                     data_bitmap: Bitmap::new(
@@ -120,6 +129,17 @@ impl EasyFileSystem {
             block_id,
             (inode_id % inodes_per_block) as usize * inode_size,
         )
+    }
+    /// Recover an inode number from its on-disk location.
+    pub fn get_disk_inode_id(&self, block_id: usize, offset: usize) -> u32 {
+        let size = core::mem::size_of::<DiskInode>();
+        ((block_id - self.inode_area_start_block as usize) * (BLOCK_SZ / size) + offset / size)
+            as u32
+    }
+    /// Return an unused inode number to the allocation bitmap.
+    pub fn dealloc_inode(&mut self, inode_id: u32) {
+        self.inode_bitmap
+            .dealloc(&self.block_device, inode_id as usize);
     }
     /// Get data block by id
     pub fn get_data_block_id(&self, data_block_id: u32) -> u32 {
