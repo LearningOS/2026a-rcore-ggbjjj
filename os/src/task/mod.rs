@@ -9,6 +9,7 @@
 //! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
 //! might not be what you expect.
 
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 3 exercise.
 mod context;
 mod switch;
 #[allow(clippy::module_inception)]
@@ -53,6 +54,7 @@ lazy_static! {
         let num_app = get_num_app();
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
+            syscall_counts: [0; 8],
             task_status: TaskStatus::UnInit,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
@@ -168,4 +170,11 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Access the running task without holding a borrow across a context switch.
+pub fn with_current_task<R>(f: impl FnOnce(&mut TaskControlBlock) -> R) -> R {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    f(&mut inner.tasks[current])
 }
