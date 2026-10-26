@@ -1,4 +1,5 @@
 //! Types related to task management
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 4 exercise.
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
@@ -8,6 +9,9 @@ use crate::trap::{trap_handler, TrapContext};
 
 /// The task control block (TCB) of a task.
 pub struct TaskControlBlock {
+    /// Per-task counters for the syscall IDs supported by this kernel.
+    /// Per-task counts indexed by the supported syscall ID list.
+    pub syscall_counts: [usize; 8],
     /// Save task context
     pub task_cx: TaskContext,
 
@@ -56,6 +60,7 @@ impl TaskControlBlock {
             MapPermission::R | MapPermission::W,
         );
         let task_control_block = Self {
+            syscall_counts: [0; 8],
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
             memory_set,

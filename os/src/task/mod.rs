@@ -9,6 +9,7 @@
 //! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
 //! might not be what you expect.
 
+// AI assistance: OpenAI Codex; reference: rCore Tutorial Guide, chapter 4 exercise.
 mod context;
 mod switch;
 #[allow(clippy::module_inception)]
@@ -201,4 +202,11 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Access the running task without holding a borrow across a context switch.
+pub fn with_current_task<R>(f: impl FnOnce(&mut TaskControlBlock) -> R) -> R {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    f(&mut inner.tasks[current])
 }
