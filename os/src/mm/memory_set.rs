@@ -37,6 +37,158 @@ pub struct MemorySet {
 }
 
 impl MemorySet {
+    /// Copy to a user buffer only after validating every page and permission.
+    /// AI assistance: OpenAI Codex; requirements: rCore Guide chapter 4 exercise.
+    pub fn copy_to_user(&self, start: usize, bytes: &[u8]) -> bool {
+        let Some(end) = start.checked_add(bytes.len()) else {
+            return false;
+        };
+        if end > (1usize << 38) {
+            return false;
+        }
+        let mut cursor = start;
+        while cursor < end {
+            let Some(pte) = self.translate(VirtAddr::from(cursor).floor()) else {
+                return false;
+            };
+            if !pte.flags().contains(PTEFlags::U | PTEFlags::W) {
+                return false;
+            }
+            cursor += (PAGE_SIZE - cursor % PAGE_SIZE).min(end - cursor);
+        }
+        let mut copied = 0;
+        while copied < bytes.len() {
+            let address = start + copied;
+            let pte = self.translate(VirtAddr::from(address).floor()).unwrap();
+            let offset = address % PAGE_SIZE;
+            let count = (PAGE_SIZE - offset).min(bytes.len() - copied);
+            pte.ppn().get_bytes_array()[offset..offset + count]
+                .copy_from_slice(&bytes[copied..copied + count]);
+            copied += count;
+        }
+        true
+    }
+
+    /// Read one byte after checking the user and read permission bits.
+    pub fn read_user_byte(&self, address: usize) -> Option<u8> {
+        if address >= (1usize << 38) {
+            return None;
+        }
+        let pte = self.translate(VirtAddr::from(address).floor())?;
+        if !pte.flags().contains(PTEFlags::U | PTEFlags::R) {
+            return None;
+        }
+        Some(pte.ppn().get_bytes_array()[address % PAGE_SIZE])
+    }
+
+    /// Anonymous mappings own their frames so fork and exit reclaim them too.
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        if start % PAGE_SIZE != 0 || prot == 0 || prot & !7 != 0 {
+            return -1;
+        }
+        let Some(end) = start.checked_add(len) else {
+            return -1;
+        };
+        if end > (1usize << 38) {
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+        let first = VirtAddr::from(start).floor();
+        let last = VirtAddr::from(end).ceil();
+        for vpn in VPNRange::new(first, last) {
+            if self.translate(vpn).is_some() {
+                return -1;
+            }
+        }
+        let permission = MapPermission::U | MapPermission::from_bits((prot << 1) as u8).unwrap();
+        let mut area = MapArea::new(start.into(), end.into(), MapType::Framed, permission);
+        // Reserve data pages before modifying page-table entries.
+        for vpn in area.vpn_range {
+            let Some(frame) = frame_alloc() else {
+                return -1;
+            };
+            area.data_frames.insert(vpn, frame);
+        }
+        let flags = PTEFlags::from_bits(permission.bits).unwrap();
+        for (vpn, frame) in area.data_frames.iter() {
+            if !self.page_table.try_map(*vpn, frame.ppn, flags) {
+                for previous in VPNRange::new(first, *vpn) {
+                    self.page_table.unmap(previous);
+                }
+                return -1;
+            }
+        }
+        self.areas.push(area);
+        unsafe {
+            asm!("sfence.vma");
+        }
+        0
+    }
+
+    /// Validate first, then remove mappings. Preserve both sides of split areas.
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        let Some(end) = start.checked_add(len) else {
+            return -1;
+        };
+        if end > (1usize << 38) {
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+        let first = VirtAddr::from(start).floor();
+        let last = VirtAddr::from(end).ceil();
+        for vpn in VPNRange::new(first, last) {
+            if !self
+                .translate(vpn)
+                .map_or(false, |pte| pte.flags().contains(PTEFlags::U))
+            {
+                return -1;
+            }
+        }
+        let old_areas = core::mem::take(&mut self.areas);
+        for mut area in old_areas {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            if area_end <= first || area_start >= last {
+                self.areas.push(area);
+                continue;
+            }
+            let cut_start = area_start.max(first);
+            let cut_end = area_end.min(last);
+            for vpn in VPNRange::new(cut_start, cut_end) {
+                area.unmap_one(&mut self.page_table, vpn);
+            }
+            if area_start < cut_start {
+                let mut left = MapArea::new(
+                    VirtAddr::from(area_start),
+                    VirtAddr::from(cut_start),
+                    area.map_type,
+                    area.map_perm,
+                );
+                for vpn in VPNRange::new(area_start, cut_start) {
+                    if let Some(frame) = area.data_frames.remove(&vpn) {
+                        left.data_frames.insert(vpn, frame);
+                    }
+                }
+                self.areas.push(left);
+            }
+            if cut_end < area_end {
+                area.vpn_range = VPNRange::new(cut_end, area_end);
+                self.areas.push(area);
+            }
+        }
+        unsafe {
+            asm!("sfence.vma");
+        }
+        0
+    }
+
     /// Create a new empty `MemorySet`.
     pub fn new_bare() -> Self {
         Self {
